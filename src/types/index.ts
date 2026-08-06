@@ -400,7 +400,7 @@ export interface Quote {
 
 export type NavSection =
   | 'dashboard'
-  
+  | 'email'
   | 'ingest'
   | 'inventory'
   | 'analytics'

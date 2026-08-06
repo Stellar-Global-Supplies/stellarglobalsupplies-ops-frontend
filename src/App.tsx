@@ -20,6 +20,7 @@ import {
   ClipboardList,
   Sun,
   Moon,
+  Mail,
 } from 'lucide-react';
 import type { Session } from '@supabase/supabase-js';
 import type { LucideIcon } from 'lucide-react';
@@ -36,6 +37,7 @@ import AuthPage from '@/components/AuthPage';
 import TasksPage from '@/pages/tasks/TasksPage';
 import OrderSummaryDashboard from '@/components/OrderSummaryDashboard';
 import QuotationsDashboard from '@/components/QuotationsDashboard';
+import EmailCampaignWidget from '@/components/EmailCampaignWidget';
 import { setUser, clearUser, recordNavigation } from '@/tracing';
 
 interface NavItem {
@@ -47,6 +49,7 @@ interface NavItem {
 
 const CEO_ITEMS: NavItem[] = [
   { section: 'dashboard',          label: 'Command Center',    Icon: LayoutDashboard, badge: 'LIVE' },
+  { section: 'email',              label: 'Email Campaign',    Icon: Mail             },
   { section: 'ingest',             label: 'Data Ingest',       Icon: Upload           },
   { section: 'inventory',          label: 'Inventory',         Icon: Package          },
   { section: 'analytics',          label: 'Analytics',         Icon: BarChart3        },
@@ -363,6 +366,7 @@ function MainContent({ session }: { session: Session | null }) {
   const content = (() => {
     switch (activeSection) {
       case 'dashboard':          return <Dashboard />;
+      case 'email':              return <EmailCampaignWidget />;
       case 'ingest':             return <DataIngestion />;
       case 'inventory':          return <InventoryDashboard />;
       case 'analytics':          return <Analytics />;
