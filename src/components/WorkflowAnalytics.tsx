@@ -940,51 +940,60 @@ export default function WorkflowAnalytics() {
       ) : (
         <>
           {/* Row 1 — KPI Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-            <KPICard
-              label="Total Leads"
-              value={wf.leads.total.toString()}
-              subtext={`${wf.leads.recent30} in 30d`}
-              icon={<Users size={16} />}
-              color={COLOURS.royal}
-            />
-            <KPICard
-              label="Conversion Rate"
-              value={`${wf.leads.conversion_rate.toFixed(1)}%`}
-              icon={<TrendingUp size={16} />}
-              color={COLOURS.emerald}
-            />
-            <KPICard
-              label="Posts Published"
-              value={wf.social_posts.by_status.published?.toString() || '0'}
-              subtext={wf.social_posts.ready_to_publish > 0 ? `${wf.social_posts.ready_to_publish} ready` : undefined}
-              icon={<Activity size={16} />}
-              color={COLOURS.linkedin}
-              alert={wf.social_posts.ready_to_publish > 0}
-            />
-            <KPICard
-              label="Blogs Published"
-              value={wf.blog_posts.by_status.published?.toString() || '0'}
-              subtext={`${wf.blog_posts.published_rate.toFixed(1)}% rate`}
-              icon={<FileText size={16} />}
-              color={COLOURS.amber}
-            />
-            <KPICard
-              label="Approval Rate"
-              value={`${wf.approvals.approval_rate.toFixed(1)}%`}
-              subtext={wf.approvals.pending > 0 ? `${wf.approvals.pending} pending` : undefined}
-              icon={<CheckSquare size={16} />}
-              color={wf.approvals.pending > 0 ? COLOURS.amber : COLOURS.emerald}
-              alert={wf.approvals.pending > 0}
-            />
-            <KPICard
-              label="Active Schedules"
-              value={wf.schedules.active.toString()}
-              subtext={`${wf.schedules.total} total`}
-              icon={<Clock size={16} />}
-              color={COLOURS.royal}
-            />
-          </div>
+          {/* approval_queue and workflow_runs cards are hidden when those tables don't exist yet */}
+          {(() => {
+            const hasApprovals = wf.approvals.pending > 0 || wf.approvals.approval_rate > 0 || Object.keys(wf.approvals.by_workflow_type).length > 0;
+            const colCount = hasApprovals ? 'grid-cols-2 md:grid-cols-3 xl:grid-cols-6' : 'grid-cols-2 md:grid-cols-2 xl:grid-cols-4';
+            return (
+              <div className={`grid ${colCount} gap-3`}>
+                <KPICard
+                  label="Total Leads"
+                  value={wf.leads.total.toString()}
+                  subtext={`${wf.leads.recent30} in 30d`}
+                  icon={<Users size={16} />}
+                  color={COLOURS.royal}
+                />
+                <KPICard
+                  label="Conversion Rate"
+                  value={`${wf.leads.conversion_rate.toFixed(1)}%`}
+                  icon={<TrendingUp size={16} />}
+                  color={COLOURS.emerald}
+                />
+                <KPICard
+                  label="Posts Published"
+                  value={wf.social_posts.by_status.published?.toString() || '0'}
+                  subtext={wf.social_posts.ready_to_publish > 0 ? `${wf.social_posts.ready_to_publish} ready` : undefined}
+                  icon={<Activity size={16} />}
+                  color={COLOURS.linkedin}
+                  alert={wf.social_posts.ready_to_publish > 0}
+                />
+                <KPICard
+                  label="Blogs Published"
+                  value={wf.blog_posts.by_status.published?.toString() || '0'}
+                  subtext={`${wf.blog_posts.published_rate.toFixed(1)}% rate`}
+                  icon={<FileText size={16} />}
+                  color={COLOURS.amber}
+                />
+                {hasApprovals && (
+                  <KPICard
+                    label="Approval Rate"
+                    value={`${wf.approvals.approval_rate.toFixed(1)}%`}
+                    subtext={wf.approvals.pending > 0 ? `${wf.approvals.pending} pending` : undefined}
+                    icon={<CheckSquare size={16} />}
+                    color={wf.approvals.pending > 0 ? COLOURS.amber : COLOURS.emerald}
+                    alert={wf.approvals.pending > 0}
+                  />
+                )}
+                <KPICard
+                  label="Active Schedules"
+                  value={wf.schedules.active.toString()}
+                  subtext={`${wf.schedules.total} total`}
+                  icon={<Clock size={16} />}
+                  color={COLOURS.royal}
+                />
+              </div>
+            );
+          })()}
 
           {/* Row 2 — Lead Generation */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
@@ -1037,68 +1046,83 @@ export default function WorkflowAnalytics() {
           <AICostPanel data={wf.cost} />
 
           {/* Row 5 — Blog + Approval */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
-            <div className="space-y-3 sm:space-y-4">
+          {/* ApprovalHealth is only shown when the approval_queue table exists (approvals data present) */}
+          {wf.approvals.pending > 0 || wf.approvals.approval_rate > 0 || Object.keys(wf.approvals.by_workflow_type).length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
+              <div className="space-y-3 sm:space-y-4">
+                <BlogStatusDonut data={wf.blog_posts} />
+                <BlogMonthlyTimeline data={wf.blog_posts} />
+              </div>
+              <div className="space-y-3 sm:space-y-4">
+                <ApprovalHealth data={wf.approvals} />
+                <TopTagsBar data={wf.blog_posts} />
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
               <BlogStatusDonut data={wf.blog_posts} />
-              <BlogMonthlyTimeline data={wf.blog_posts} />
+              <div className="space-y-3 sm:space-y-4">
+                <BlogMonthlyTimeline data={wf.blog_posts} />
+                <TopTagsBar data={wf.blog_posts} />
+              </div>
             </div>
-            <div className="space-y-3 sm:space-y-4">
-              <ApprovalHealth data={wf.approvals} />
-              <TopTagsBar data={wf.blog_posts} />
-            </div>
-          </div>
+          )}
 
-          {/* Row 6 — Workflow Runs */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
-            <SuccessRateByType data={wf.workflow_runs} />
-            <RunVolumeOverTime data={wf.workflow_runs} />
-          </div>
+          {/* Row 6 — Workflow Runs (only shown when workflow_runs table exists) */}
+          {wf.workflow_runs.total > 0 && (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
+                <SuccessRateByType data={wf.workflow_runs} />
+                <RunVolumeOverTime data={wf.workflow_runs} />
+              </div>
 
-          {/* Workflow Runs summary bar */}
-          <div className="flex flex-wrap gap-3">
-            <div className="glass-card px-4 py-3 flex items-center gap-3">
-              <Zap size={14} className="text-emerald-400" />
-              <div>
-                <p className="text-2xs text-slate-500">Succeeded</p>
-                <p className="text-sm font-bold text-slate-100 tabular-nums">{wf.workflow_runs.succeeded}</p>
-              </div>
-            </div>
-            <div className="glass-card px-4 py-3 flex items-center gap-3">
-              <Zap size={14} className="text-red-400" />
-              <div>
-                <p className="text-2xs text-slate-500">Failed</p>
-                <p className="text-sm font-bold text-slate-100 tabular-nums">{wf.workflow_runs.failed}</p>
-              </div>
-            </div>
-            <div className="glass-card px-4 py-3 flex items-center gap-3">
-              <Zap size={14} className="text-blue-400" />
-              <div>
-                <p className="text-2xs text-slate-500">Avg Duration</p>
-                <p className="text-sm font-bold text-slate-100 tabular-nums">{wf.workflow_runs.avg_duration_min.toFixed(1)}m</p>
-              </div>
-            </div>
-            {wf.workflow_runs.active_runs.length > 0 && (
-              <div className="glass-card px-4 py-3 flex items-center gap-3" style={{ borderColor: 'rgba(21,101,192,0.3)' }}>
-                <Activity size={14} className="text-blue-400" />
-                <div>
-                  <p className="text-2xs text-slate-500">Active Runs</p>
-                  <p className="text-sm font-bold text-blue-400 tabular-nums">{wf.workflow_runs.active_runs.length}</p>
+              {/* Workflow Runs summary bar */}
+              <div className="flex flex-wrap gap-3">
+                <div className="glass-card px-4 py-3 flex items-center gap-3">
+                  <Zap size={14} className="text-emerald-400" />
+                  <div>
+                    <p className="text-2xs text-slate-500">Succeeded</p>
+                    <p className="text-sm font-bold text-slate-100 tabular-nums">{wf.workflow_runs.succeeded}</p>
+                  </div>
                 </div>
-              </div>
-            )}
-            {wf.workflow_runs.recent_failed.length > 0 && (
-              <div className="glass-card px-4 py-3 flex items-center gap-3" style={{ borderColor: 'rgba(239,68,68,0.3)' }}>
-                <AlertTriangle size={14} className="text-red-400" />
-                <div>
-                  <p className="text-2xs text-slate-500">Failed this week</p>
-                  <p className="text-sm font-bold text-red-400 tabular-nums">{wf.workflow_runs.recent_failed.length}</p>
+                <div className="glass-card px-4 py-3 flex items-center gap-3">
+                  <Zap size={14} className="text-red-400" />
+                  <div>
+                    <p className="text-2xs text-slate-500">Failed</p>
+                    <p className="text-sm font-bold text-slate-100 tabular-nums">{wf.workflow_runs.failed}</p>
+                  </div>
                 </div>
+                <div className="glass-card px-4 py-3 flex items-center gap-3">
+                  <Zap size={14} className="text-blue-400" />
+                  <div>
+                    <p className="text-2xs text-slate-500">Avg Duration</p>
+                    <p className="text-sm font-bold text-slate-100 tabular-nums">{wf.workflow_runs.avg_duration_min.toFixed(1)}m</p>
+                  </div>
+                </div>
+                {wf.workflow_runs.active_runs.length > 0 && (
+                  <div className="glass-card px-4 py-3 flex items-center gap-3" style={{ borderColor: 'rgba(21,101,192,0.3)' }}>
+                    <Activity size={14} className="text-blue-400" />
+                    <div>
+                      <p className="text-2xs text-slate-500">Active Runs</p>
+                      <p className="text-sm font-bold text-blue-400 tabular-nums">{wf.workflow_runs.active_runs.length}</p>
+                    </div>
+                  </div>
+                )}
+                {wf.workflow_runs.recent_failed.length > 0 && (
+                  <div className="glass-card px-4 py-3 flex items-center gap-3" style={{ borderColor: 'rgba(239,68,68,0.3)' }}>
+                    <AlertTriangle size={14} className="text-red-400" />
+                    <div>
+                      <p className="text-2xs text-slate-500">Failed this week</p>
+                      <p className="text-sm font-bold text-red-400 tabular-nums">{wf.workflow_runs.recent_failed.length}</p>
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
 
-          {/* Row 7 — Recent Workflow Runs List */}
-          <RecentWorkflowRuns data={wf.workflow_runs.recent} />
+              {/* Recent Workflow Runs List */}
+              <RecentWorkflowRuns data={wf.workflow_runs.recent} />
+            </>
+          )}
 
           {/* Row 8 — Schedules Table */}
           <SchedulesTable data={wf.schedules} />
