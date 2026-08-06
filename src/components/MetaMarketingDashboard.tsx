@@ -44,7 +44,6 @@ import type { LucideIcon } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { fetchMetaAnalytics, refreshMetaAnalytics } from '@/api/client';
 import type { AnalyticsPeriod, GeoEntry, MetaAnalyticsData, TopPage } from '@/types';
-import { useNavStore } from '@/store';
 
 type Channel = 'facebook' | 'instagram' | 'ads';
 type NativeMetricPoint = { date: string; value: number };
@@ -733,7 +732,6 @@ function HourChart({ data, channel }: { data: MetaAnalyticsData; channel: Channe
 }
 
 function DeviceAndPlan({ data, channel }: { data: MetaAnalyticsData; channel: Channel }) {
-  const setSection = useNavStore((s) => s.setSection);
   const cfg = CHANNELS[channel];
   const insights = nativeInsights(data);
   const locations = channelGeo(data, channel).map((entry) => entry.country);
@@ -771,19 +769,14 @@ function DeviceAndPlan({ data, channel }: { data: MetaAnalyticsData; channel: Ch
         </div>
         <button
           onClick={() => {
-            setSection('agents');
-            window.dispatchEvent(new CustomEvent('prefill-agent', {
-              detail: {
-                agentId: 'marketing-manager',
-                message: `Create a ${CHANNELS[channel].label} campaign plan for Stellar Global Supplies using ${data.label}, top locations ${locations.join(', ') || data.meta_insights.top_locations.join(', ') || topLocations}, ${fmt(data.meta_insights.warm_audience_size)} warm visitors, and best ad time ${insights.bestTime}.`,
-              },
-            }));
+            const brief = `Campaign Brief — ${CHANNELS[channel].label}\nPeriod: ${data.label}\nTop Locations: ${locations.join(', ') || data.meta_insights?.top_locations?.join(', ') || topLocations}\nWarm Audience: ${fmt(data.meta_insights?.warm_audience_size ?? 0)} visitors\nBest Ad Time: ${insights.bestTime}\nRecommended Objective: ${data.meta_insights?.recommended_objective ?? '—'}\nBest Placement: ${data.meta_insights?.best_placement ?? '—'}`;
+            navigator.clipboard.writeText(brief).catch(() => {});
           }}
           className="h-10 px-3 rounded-xl text-xs font-semibold text-white flex items-center gap-2 shadow-lg hover:-translate-y-0.5"
           style={{ backgroundColor: cfg.accent }}
         >
           <Send size={14} />
-          Brief Marketing Manager
+          Copy Campaign Brief
         </button>
       </div>
     </Panel>

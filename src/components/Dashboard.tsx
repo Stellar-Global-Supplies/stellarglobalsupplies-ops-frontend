@@ -461,7 +461,7 @@ function QuickActions() {
       label: 'Talk to Sales Analyst',
       desc:  'Get revenue insights from AI',
       color: '#6366f1',
-      onClick: () => setSection('agents'),
+      onClick: () => setSection('meta'),
     },
     {
       label: 'Upload Sales Data',
