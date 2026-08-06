@@ -3,18 +3,22 @@
  * Simplified: no Google OAuth flow, no connection status check.
  * Gmail is always ready — credentials live in Worker secrets.
  */
-import { useState, useCallback } from 'react';
-import { Mail, Upload, Paperclip, Send, XCircle, Loader2, CheckCircle } from 'lucide-react';
+import { useState, useCallback, useMemo } from 'react';
+import { Mail, Upload, Paperclip, Send, XCircle, Loader2, CheckCircle, Code2, Eye, FileText } from 'lucide-react';
 import { useMutation } from '@tanstack/react-query';
 import { sendBulkEmail } from '@/api/client';
 
 type Recipient  = { email: string; name?: string; [key: string]: unknown };
 type Attachment = { file: File; preview?: string };
+type BodyType   = 'plain' | 'html';
+type HtmlTab    = 'code' | 'preview';
 
 export default function EmailCampaignWidget() {
   const [recipients,     setRecipients]     = useState<Recipient[]>([]);
   const [subject,        setSubject]        = useState('');
   const [emailBody,      setEmailBody]      = useState('');
+  const [bodyType,       setBodyType]       = useState<BodyType>('plain');
+  const [htmlTab,        setHtmlTab]        = useState<HtmlTab>('code');
   const [attachments,    setAttachments]    = useState<Attachment[]>([]);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const [successMsg,     setSuccessMsg]     = useState<string | null>(null);
@@ -98,8 +102,35 @@ export default function EmailCampaignWidget() {
     if (!recipients.length) { setErrorMsg('Upload recipients first.'); return; }
     if (!subject.trim())    { setErrorMsg('Subject is required.');     return; }
     if (!emailBody.trim())  { setErrorMsg('Body is required.');        return; }
-    sendMutation.mutate({ recipients: recipients.map(r => r.email), subject: subject.trim(), body: emailBody.trim(), attachments: attachments.map(a => a.file) });
-  }, [recipients, subject, emailBody, attachments, sendMutation]);
+    sendMutation.mutate({
+      recipients: recipients.map(r => r.email),
+      subject: subject.trim(),
+      body: emailBody.trim(),
+      bodyType,
+      attachments: attachments.map(a => a.file),
+    });
+  }, [recipients, subject, emailBody, bodyType, attachments, sendMutation]);
+
+  // Live preview of the pasted HTML — sandboxed so scripts/forms never execute.
+  const previewHtml = useMemo(() => {
+    if (bodyType !== 'html' || !emailBody.trim()) return '<div style="color:#94a3b8;font-family:sans-serif;padding:16px;">Paste HTML in the Code tab to see a live preview here.</div>';
+    return emailBody;
+  }, [bodyType, emailBody]);
+
+  const bodyTypeBtn = (bt: BodyType, label: string, icon: React.ReactNode) => (
+    <button
+      type="button"
+      onClick={() => { setBodyType(bt); setErrorMsg(null); }}
+      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+        bodyType === bt
+          ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40'
+          : 'bg-slate-800/50 text-slate-400 border border-slate-700 hover:text-slate-300'
+      }`}
+    >
+      {icon}
+      {label}
+    </button>
+  );
 
   return (
     <div className="agent-card p-6">
@@ -155,12 +186,66 @@ export default function EmailCampaignWidget() {
 
         {/* Body */}
         <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1">Body <span className="text-slate-500 font-normal">(HTML supported)</span></label>
-          <textarea
-            value={emailBody} onChange={e => setEmailBody(e.target.value)}
-            placeholder="Write your email…" rows={6}
-            className="w-full px-3 py-2 bg-slate-800/50 border border-slate-700 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:border-emerald-400/60 focus:outline-none transition-colors font-mono"
-          />
+          <div className="flex items-center justify-between mb-2">
+            <label className="block text-sm font-medium text-slate-300">Body</label>
+            <div className="flex gap-1.5">
+              {bodyTypeBtn('plain', 'Plain Text', <FileText size={12} />)}
+              {bodyTypeBtn('html', 'HTML Template', <Code2 size={12} />)}
+            </div>
+          </div>
+
+          {bodyType === 'plain' ? (
+            <textarea
+              value={emailBody} onChange={e => setEmailBody(e.target.value)}
+              placeholder="Write your email…" rows={6}
+              className="w-full px-3 py-2 bg-slate-800/50 border border-slate-700 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:border-emerald-400/60 focus:outline-none transition-colors font-mono"
+            />
+          ) : (
+            <div className="border border-slate-700 rounded-lg overflow-hidden">
+              {/* Code ↔ Preview tabs */}
+              <div className="flex bg-slate-900 border-b border-slate-700">
+                <button
+                  type="button"
+                  onClick={() => setHtmlTab('code')}
+                  className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors ${
+                    htmlTab === 'code' ? 'bg-slate-800 text-indigo-300 border-b-2 border-indigo-500' : 'text-slate-400 hover:text-slate-300'
+                  }`}
+                >
+                  <Code2 size={12} />Code
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setHtmlTab('preview')}
+                  className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors ${
+                    htmlTab === 'preview' ? 'bg-slate-800 text-indigo-300 border-b-2 border-indigo-500' : 'text-slate-400 hover:text-slate-300'
+                  }`}
+                >
+                  <Eye size={12} />Preview
+                </button>
+                {htmlTab === 'preview' && (
+                  <span className="ml-auto self-center text-2xs text-slate-500 pr-3">Updates live as you type</span>
+                )}
+              </div>
+
+              {htmlTab === 'code' ? (
+                <textarea
+                  value={emailBody} onChange={e => setEmailBody(e.target.value)}
+                  placeholder={'<html>\n  <body>\n    <h1>Hello!</h1>\n    <p>Paste your HTML template here…</p>\n  </body>\n</html>'}
+                  rows={10} spellCheck={false}
+                  className="w-full px-3 py-2 bg-slate-900 text-sm text-emerald-300 placeholder-slate-600 focus:outline-none font-mono resize-y"
+                />
+              ) : (
+                <div className="bg-white p-4">
+                  <iframe
+                    title="Email HTML Preview"
+                    srcDoc={previewHtml}
+                    sandbox=""
+                    className="w-full min-h-[320px] rounded border border-slate-200 bg-white"
+                  />
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Attachments */}

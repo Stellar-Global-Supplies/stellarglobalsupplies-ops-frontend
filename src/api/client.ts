@@ -99,6 +99,7 @@ export interface BulkEmailRequest {
   recipients:   string[];
   subject:      string;
   body:         string;
+  bodyType?:    'html' | 'plain';
   attachments?: File[];
 }
 
@@ -142,6 +143,7 @@ export async function sendBulkEmail(payload: BulkEmailRequest): Promise<BulkEmai
       recipients:  payload.recipients,
       subject:     payload.subject,
       body:        payload.body,
+      bodyType:    payload.bodyType ?? 'plain',
       attachments: encodedAttachments,
     }),
   });
