@@ -25,7 +25,7 @@ import {
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { ZoneContextManager } from '@opentelemetry/context-zone';
 import { W3CTraceContextPropagator } from '@opentelemetry/core';
-import { Resource } from '@opentelemetry/resources';
+import { resourceFromAttributes } from '@opentelemetry/resources';
 import {
   ATTR_SERVICE_NAME,
   ATTR_SERVICE_VERSION,
@@ -67,7 +67,7 @@ export function initTracing(): void {
     console.warn('[tracing] VITE_NR_LICENSE_KEY not set — traces will not be exported.');
   }
 
-  const resource = new Resource({
+  const resource = resourceFromAttributes({
     [ATTR_SERVICE_NAME]:    SERVICE_NAME,
     [ATTR_SERVICE_VERSION]: SERVICE_VERSION,
     'deployment.environment': import.meta.env.MODE ?? 'production',
@@ -75,9 +75,11 @@ export function initTracing(): void {
     'browser.language':     navigator.language,
   });
 
-  _provider = new WebTracerProvider({ resource });
+  // ── Collect processors before constructing provider ───────────────────────
+  // WebTracerProvider v2.x accepts spanProcessors in the constructor options;
+  // addSpanProcessor() no longer exists on the class.
 
-  // ── Exporters ─────────────────────────────────────────────────────────────
+  const spanProcessors = [];
 
   if (NR_LICENSE_KEY) {
     const exporter = new OTLPTraceExporter({
@@ -87,7 +89,7 @@ export function initTracing(): void {
       },
     });
     // BatchSpanProcessor — buffers and sends every 3 s or when 30 spans queued
-    _provider.addSpanProcessor(
+    spanProcessors.push(
       new BatchSpanProcessor(exporter, {
         scheduledDelayMillis: 3000,
         maxExportBatchSize:   30,
@@ -99,8 +101,10 @@ export function initTracing(): void {
 
   // Console exporter in dev for easy debugging
   if (import.meta.env.DEV) {
-    _provider.addSpanProcessor(new SimpleSpanProcessor(new ConsoleSpanExporter()));
+    spanProcessors.push(new SimpleSpanProcessor(new ConsoleSpanExporter()));
   }
+
+  _provider = new WebTracerProvider({ resource, spanProcessors });
 
   // ── Context + Propagation ─────────────────────────────────────────────────
 
