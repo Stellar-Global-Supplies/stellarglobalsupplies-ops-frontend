@@ -23,7 +23,7 @@
     "zustand": "^4.5.4",
     "dompurify": "^3.1.6",
     "@opentelemetry/api": "^1.9.0",
-    "@opentelemetry/auto-instrumentations-web": "^0.46.0",
+    "@opentelemetry/auto-instrumentations-web": "^0.64.0",
     "@opentelemetry/context-zone": "^1.27.0",
     "@opentelemetry/core": "^2.8.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.219.0",
