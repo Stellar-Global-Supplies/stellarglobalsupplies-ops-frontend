@@ -374,10 +374,10 @@ async function ingestFile(
   }
 
   // Upsert in batches — same conflict columns as the Lambda.
-  // ignoreDuplicates: true → emits ON CONFLICT (...) DO NOTHING, avoiding
-  // the DELETE+INSERT strategy that triggers "DELETE requires a WHERE clause".
-  // Safe for item tables because row_key is a SHA-256 of the row content —
-  // a duplicate key always means identical data, so skipping is correct.
+  // Item tables (sales_items, purchase_items) use an RPC function that runs
+  // INSERT ... ON CONFLICT (row_key) DO NOTHING at the DB level, bypassing
+  // the Supabase JS client's DELETE+INSERT strategy that causes
+  // "DELETE requires a WHERE clause". All other tables use standard upsert.
   const grouped      = groupByTable(records);
   const totalRows    = records.length;
   let   inserted     = 0;
@@ -385,15 +385,25 @@ async function ingestFile(
 
   for (const [table, rows] of grouped) {
     tableNames.push(table);
-    const conflictCol = CONFLICT_COL[table];
+    const conflictCol  = CONFLICT_COL[table];
+    const isItemTable  = table === 'sales_items' || table === 'purchase_items';
 
     for (let i = 0; i < rows.length; i += BATCH_SIZE) {
       const batch = rows.slice(i, i + BATCH_SIZE);
-      const { error } = await supabase
-        .from(table)
-        .upsert(batch, { onConflict: conflictCol, ignoreDuplicates: true });
 
-      if (error) throw new Error(`${table}: ${error.message}`);
+      if (isItemTable) {
+        // RPC bypasses JS client upsert — plain INSERT … ON CONFLICT DO NOTHING
+        const { error } = await supabase.rpc('upsert_items', {
+          p_table: table,
+          p_rows:  JSON.stringify(batch),
+        });
+        if (error) throw new Error(`${table}: ${error.message}`);
+      } else {
+        const { error } = await supabase
+          .from(table)
+          .upsert(batch, { onConflict: conflictCol });
+        if (error) throw new Error(`${table}: ${error.message}`);
+      }
 
       inserted += batch.length;
       onInserting(
