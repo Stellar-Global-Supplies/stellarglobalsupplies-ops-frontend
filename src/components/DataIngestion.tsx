@@ -395,7 +395,7 @@ async function ingestFile(
         // RPC bypasses JS client upsert — plain INSERT … ON CONFLICT DO NOTHING
         const { error } = await supabase.rpc('upsert_items', {
           p_table: table,
-          p_rows:  JSON.stringify(batch),
+          p_rows:  batch,   // pass array directly — supabase-js serialises as JSONB array
         });
         if (error) throw new Error(`${table}: ${error.message}`);
       } else {
