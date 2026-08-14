@@ -373,7 +373,11 @@ async function ingestFile(
     );
   }
 
-  // Upsert in batches — same conflict columns as the Lambda
+  // Upsert in batches — same conflict columns as the Lambda.
+  // ignoreDuplicates: true → emits ON CONFLICT (...) DO NOTHING, avoiding
+  // the DELETE+INSERT strategy that triggers "DELETE requires a WHERE clause".
+  // Safe for item tables because row_key is a SHA-256 of the row content —
+  // a duplicate key always means identical data, so skipping is correct.
   const grouped      = groupByTable(records);
   const totalRows    = records.length;
   let   inserted     = 0;
@@ -387,7 +391,7 @@ async function ingestFile(
       const batch = rows.slice(i, i + BATCH_SIZE);
       const { error } = await supabase
         .from(table)
-        .upsert(batch, { onConflict: conflictCol });
+        .upsert(batch, { onConflict: conflictCol, ignoreDuplicates: true });
 
       if (error) throw new Error(`${table}: ${error.message}`);
 
