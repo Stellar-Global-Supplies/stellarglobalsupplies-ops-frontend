@@ -162,20 +162,22 @@ export interface InventoryItem {
 }
 
 // -----------------------------------------------------------
-// Upload pipeline types
+// Upload pipeline types (browser → Supabase, no S3)
 // -----------------------------------------------------------
 
-export type UploadStatus = 'idle' | 'requesting-url' | 'uploading' | 'processing' | 'complete' | 'error';
+export type UploadStatus = 'idle' | 'parsing' | 'inserting' | 'complete' | 'error';
 
 export interface UploadJob {
-  id:         string;
-  filename:   string;
-  file_size:  number;
-  status:     UploadStatus;
-  progress:   number;       // 0–100
-  s3_key?:    string;
-  error?:     string;
-  started_at: string;
+  id:           string;
+  filename:     string;
+  file_size:    number;
+  status:       UploadStatus;
+  progress:     number;        // 0–100
+  rows_total?:  number;
+  rows_done?:   number;
+  table?:       string;        // Supabase table inserted into
+  error?:       string;
+  started_at:   string;
   completed_at?: string;
 }
 
@@ -319,14 +321,14 @@ export interface Order {
   sale_cost:       number;
   cgst_total:      number;
   sgst_total:      number;
-  igst_total?:     number;  // Optional - for inter-state sales
+  igst_total?:     number;
   payment_status:  PaymentStatus;
-  delivery_timeline: string | null;  // ISO date string
+  delivery_timeline: string | null;
   status:          OrderStatus;
   created_by:      string | null;
   updated_by:      string | null;
-  created_at:      string;  // ISO timestamp
-  updated_at:      string;  // ISO timestamp
+  created_at:      string;
+  updated_at:      string;
 }
 
 export interface OrderSummary {
@@ -409,5 +411,3 @@ export type NavSection =
   | 'tasks'
   | 'orders'
   | 'quotations';
-
-// ────────────────────────────────────────────────────────────────────────────

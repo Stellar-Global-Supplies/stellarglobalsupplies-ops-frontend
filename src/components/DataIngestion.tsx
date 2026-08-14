@@ -1,486 +1,551 @@
-import { useState, useRef, useCallback, useId } from 'react';
+import { useState, useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import Papa from 'papaparse';
 import {
-  FileText,
-  FileJson,
-  X,
+  UploadCloud,
   CheckCircle2,
-  AlertCircle,
+  XCircle,
   Loader2,
-  CloudUpload,
-  Info,
-  Clock,
-  HardDrive,
+  FileText,
+  AlertTriangle,
+  Database,
 } from 'lucide-react';
-import { v4 as uuidv4 } from 'uuid';
-import type { LucideIcon } from 'lucide-react';
-import { requestPresignedUrl, uploadFileToS3 } from '@/api/client';
-import { useNotificationStore } from '@/store';
-import type { UploadJob, UploadStatus } from '@/types';
+import { supabase } from '../lib/supabase';
+import { useNotificationStore } from '../store';
+import type { UploadJob, UploadStatus } from '../types';
 
-// ────────────────────────────────────────────────────────────────────────────
-// Constants
-// ────────────────────────────────────────────────────────────────────────────
-const MAX_FILE_SIZE_MB = 100;
-const MAX_FILE_SIZE    = MAX_FILE_SIZE_MB * 1024 * 1024;
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-const ACCEPTED_MIME: Record<string, string> = {
-  'text/csv':         'csv',
-  'application/json': 'json',
-  'text/plain':       'csv',  // some systems send .csv as text/plain
+const PARSE_LIMIT_MB = 25;
+const PARSE_LIMIT_BYTES = PARSE_LIMIT_MB * 1024 * 1024;
+const BATCH_SIZE = 500; // rows per Supabase insert call
+
+// ─── File-type detection ──────────────────────────────────────────────────────
+
+type FileKind =
+  | 'sales_items'
+  | 'purchase_items'
+  | 'sales'
+  | 'purchase_orders'
+  | 'unknown';
+
+function detectFileKind(filename: string): FileKind {
+  const n = filename.toLowerCase().replace(/[_\-\s]+/g, ' ');
+  if (/item.*(wise|wise\s)?\s*purchase|purchase.*item/i.test(n)) return 'purchase_items';
+  if (/item.*(wise|wise\s)?\s*sales?|sales?.*item/i.test(n))     return 'sales_items';
+  if (/purchase|po\b|supplier/i.test(n))                          return 'purchase_orders';
+  if (/sales?|invoice|customer/i.test(n))                         return 'sales';
+  return 'unknown';
+}
+
+// ─── Column mappers ────────────────────────────────────────────────────────────
+// Each entry: target_column → list of source header aliases (lowercase, trimmed)
+
+const COL_MAP: Record<FileKind, Record<string, string[]>> = {
+  sales: {
+    invoice_date:  ['date', 'invoice date', 'vch date', 'voucher date', 'invoice_date', 'txn date'],
+    invoice_no:    ['invoice no', 'voucher no', 'vch no', 'invoice number', 'invoice_no', 'vch no.', 'invoice no.'],
+    customer_name: ['party name', 'customer name', 'customer_name', 'party', 'buyer name', 'buyer'],
+    product_sku:   ['sku', 'item name', 'item', 'product name', 'product', 'goods', 'item_name', 'product_sku'],
+    quantity:      ['qty', 'quantity', 'units', 'qty.'],
+    unit_price:    ['rate', 'unit price', 'price', 'unit_price', 'rate per unit', 'price per unit'],
+    total_amount:  ['net amount', 'total amount', 'amount', 'net amt', 'value', 'total', 'total_amount', 'net value'],
+    material_type: ['material type', 'material', 'grade', 'category', 'type', 'material_type'],
+  },
+  purchase_orders: {
+    po_date:       ['date', 'invoice date', 'vch date', 'voucher date', 'po date', 'po_date', 'txn date'],
+    invoice_no:    ['invoice no', 'voucher no', 'vch no', 'invoice number', 'invoice_no', 'vch no.', 'po no', 'po number'],
+    vendor_name:   ['party name', 'vendor name', 'supplier name', 'vendor_name', 'supplier_name', 'party', 'vendor', 'supplier'],
+    total_amount:  ['net amount', 'total amount', 'amount', 'net amt', 'value', 'total', 'total_amount', 'net value'],
+    material_type: ['material type', 'material', 'grade', 'category', 'type', 'material_type'],
+  },
+  sales_items: {
+    invoice_date:  ['date', 'invoice date', 'vch date', 'voucher date', 'invoice_date', 'txn date'],
+    invoice_no:    ['invoice no', 'voucher no', 'vch no', 'invoice number', 'invoice_no', 'vch no.'],
+    customer_name: ['party name', 'customer name', 'customer_name', 'party', 'buyer name', 'buyer'],
+    item_name:     ['item name', 'item', 'product name', 'goods', 'description', 'item_name'],
+    quantity:      ['qty', 'quantity', 'units', 'qty.'],
+    unit:          ['unit', 'uom', 'unit of measure', 'unit_of_measure'],
+    base_amount:   ['base amount', 'taxable amount', 'taxable amt', 'amount ex gst', 'base_amount', 'basic amount', 'taxable value'],
+    gst_amount:    ['gst amount', 'tax amount', 'gst', 'total tax', 'gst_amount', 'cgst + sgst', 'tax'],
+    total_amount:  ['total amount', 'net amount', 'total', 'net total', 'total_amount', 'total value', 'value', 'net value'],
+    material_type: ['material type', 'material', 'grade', 'category', 'type', 'material_type'],
+  },
+  purchase_items: {
+    invoice_date:  ['date', 'invoice date', 'vch date', 'voucher date', 'invoice_date', 'txn date'],
+    invoice_no:    ['invoice no', 'voucher no', 'vch no', 'invoice number', 'invoice_no', 'vch no.', 'po no'],
+    supplier_name: ['party name', 'supplier name', 'vendor name', 'supplier_name', 'vendor_name', 'party', 'supplier', 'vendor'],
+    item_name:     ['item name', 'item', 'product name', 'goods', 'description', 'item_name'],
+    quantity:      ['qty', 'quantity', 'units', 'qty.'],
+    unit:          ['unit', 'uom', 'unit of measure'],
+    base_amount:   ['base amount', 'taxable amount', 'taxable amt', 'amount ex gst', 'base_amount', 'basic amount', 'taxable value'],
+    gst_amount:    ['gst amount', 'tax amount', 'gst', 'total tax', 'gst_amount', 'tax'],
+    total_amount:  ['total amount', 'net amount', 'total', 'net total', 'total_amount', 'total value', 'value', 'net value'],
+    material_type: ['material type', 'material', 'grade', 'category', 'type', 'material_type'],
+  },
+  unknown: {},
 };
 
-// const CSV_EXPECTED_HEADERS = [
-//   'Invoice_ID',
-//   'Date',
-//   'Customer_Name',
-//   'Product_SKU',
-//   'Quantity',
-//   'Unit_Price',
-//   'Total_Amount',
-//   'Material_Type',
-// ];
+// ─── Helpers ───────────────────────────────────────────────────────────────────
 
-// ────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ────────────────────────────────────────────────────────────────────────────
-function fmtBytes(bytes: number): string {
-  if (bytes < 1024)           return `${bytes} B`;
-  if (bytes < 1024 * 1024)   return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+/** Parse Indian/international number strings: "1,25,000.50" → 125000.50 */
+function parseNum(v: unknown): number {
+  if (v === null || v === undefined || v === '') return 0;
+  const cleaned = String(v).replace(/,/g, '').trim();
+  const n = parseFloat(cleaned);
+  return isNaN(n) ? 0 : n;
 }
 
-function getFileType(file: File): 'csv' | 'json' | null {
-  const ext = file.name.split('.').pop()?.toLowerCase();
-  if (ext === 'csv')  return 'csv';
-  if (ext === 'json') return 'json';
-  const mimeResult = ACCEPTED_MIME[file.type];
-  return (mimeResult as 'csv' | 'json') ?? null;
+/** Normalise a date string to ISO YYYY-MM-DD. Handles DD-MM-YYYY, DD/MM/YYYY, MM/DD/YYYY, etc. */
+function parseDate(v: unknown): string {
+  if (!v) return '';
+  const s = String(v).trim();
+  // Already ISO
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  // DD-MM-YYYY or DD/MM/YYYY (common in Indian accounting exports)
+  const dmy = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})$/);
+  if (dmy) {
+    const day   = dmy[1].padStart(2, '0');
+    const month = dmy[2].padStart(2, '0');
+    const year  = dmy[3].length === 2 ? `20${dmy[3]}` : dmy[3];
+    // Assume DD/MM/YYYY for Indian software; if month > 12 it must be MM/DD
+    if (parseInt(dmy[2]) > 12) {
+      return `${year}-${day}-${month}`;
+    }
+    return `${year}-${month}-${day}`;
+  }
+  // Fallback: let Date parse it
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  return s;
 }
 
-function validateFile(file: File): string | null {
-  const type = getFileType(file);
-  if (!type) return `Unsupported file type. Only .csv and .json are accepted.`;
-  if (file.size > MAX_FILE_SIZE) return `File exceeds ${MAX_FILE_SIZE_MB} MB limit.`;
-  if (file.size === 0) return 'File is empty.';
-  return null;
+/** Build a header→sourceKey lookup from the raw parsed header row */
+function buildColLookup(
+  headers: string[],
+  map: Record<string, string[]>
+): Record<string, number> {
+  const lookup: Record<string, number> = {};
+  const lowerHeaders = headers.map(h => h.toLowerCase().trim());
+  for (const [target, aliases] of Object.entries(map)) {
+    for (const alias of aliases) {
+      const idx = lowerHeaders.findIndex(h => h === alias || h.includes(alias));
+      if (idx !== -1) {
+        lookup[target] = idx;
+        break;
+      }
+    }
+  }
+  return lookup;
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Status badge
-// ────────────────────────────────────────────────────────────────────────────
-const STATUS_CONFIG: Record<
-  UploadStatus,
-  { label: string; color: string; bg: string; Icon: LucideIcon }
-> = {
-  'idle':           { label: 'Pending',     color: '#94a3b8', bg: '#1e293b', Icon: Clock       },
-  'requesting-url': { label: 'Authorising', color: '#f59e0b', bg: '#451a03', Icon: Loader2     },
-  'uploading':      { label: 'Uploading',   color: '#6366f1', bg: '#1e1b4b', Icon: CloudUpload },
-  'processing':     { label: 'Processing',  color: '#8b5cf6', bg: '#2e1065', Icon: Loader2     },
-  'complete':       { label: 'Complete',    color: '#10b981', bg: '#022c22', Icon: CheckCircle2},
-  'error':          { label: 'Error',       color: '#ef4444', bg: '#450a0a', Icon: AlertCircle },
+/**
+ * Tally/Busy exports often have 3–10 rows of company name / report title
+ * before the actual header row. Find the first row where ≥2 expected column
+ * aliases appear and treat that as the header.
+ */
+function findHeaderRowIndex(rows: string[][], allAliases: string[]): number {
+  for (let i = 0; i < Math.min(rows.length, 20); i++) {
+    const cells = rows[i].map(c => c.toLowerCase().trim());
+    const hits  = allAliases.filter(a => cells.some(c => c === a || c.includes(a)));
+    if (hits.length >= 2) return i;
+  }
+  return 0;
+}
+
+/** Skip blank rows and Tally's "Total" / "Grand Total" footer rows */
+function isDataRow(row: string[]): boolean {
+  if (row.every(c => c.trim() === '')) return false;
+  const first = row[0]?.trim().toLowerCase() ?? '';
+  if (/^(total|grand total|sub.?total|subtotal)/.test(first)) return false;
+  return true;
+}
+
+// ─── CSV → Supabase row transformers ─────────────────────────────────────────
+
+function transformSalesRow(raw: string[], lu: Record<string, number>) {
+  return {
+    invoice_date:  parseDate(raw[lu.invoice_date]),
+    invoice_no:    raw[lu.invoice_no]?.trim()   || null,
+    customer_name: raw[lu.customer_name]?.trim() || null,
+    product_sku:   raw[lu.product_sku]?.trim()   || null,
+    quantity:      lu.quantity    !== undefined ? parseNum(raw[lu.quantity])    : null,
+    unit_price:    lu.unit_price  !== undefined ? parseNum(raw[lu.unit_price])  : null,
+    total_amount:  parseNum(raw[lu.total_amount]),
+    material_type: raw[lu.material_type]?.trim().toUpperCase() || null,
+  };
+}
+
+function transformPurchaseRow(raw: string[], lu: Record<string, number>) {
+  return {
+    po_date:       parseDate(raw[lu.po_date]),
+    invoice_no:    raw[lu.invoice_no]?.trim()   || null,
+    vendor_name:   raw[lu.vendor_name]?.trim()  || null,
+    total_amount:  parseNum(raw[lu.total_amount]),
+    material_type: raw[lu.material_type]?.trim().toUpperCase() || null,
+  };
+}
+
+function transformSalesItemRow(raw: string[], lu: Record<string, number>) {
+  return {
+    invoice_date:  parseDate(raw[lu.invoice_date]),
+    invoice_no:    raw[lu.invoice_no]?.trim()    || null,
+    customer_name: raw[lu.customer_name]?.trim() || null,
+    item_name:     raw[lu.item_name]?.trim()     || null,
+    quantity:      lu.quantity     !== undefined ? parseNum(raw[lu.quantity])     : null,
+    unit:          raw[lu.unit]?.trim()          || null,
+    base_amount:   lu.base_amount  !== undefined ? parseNum(raw[lu.base_amount])  : null,
+    gst_amount:    lu.gst_amount   !== undefined ? parseNum(raw[lu.gst_amount])   : null,
+    total_amount:  parseNum(raw[lu.total_amount]),
+    material_type: raw[lu.material_type]?.trim().toUpperCase() || null,
+  };
+}
+
+function transformPurchaseItemRow(raw: string[], lu: Record<string, number>) {
+  return {
+    invoice_date:  parseDate(raw[lu.invoice_date]),
+    invoice_no:    raw[lu.invoice_no]?.trim()    || null,
+    supplier_name: raw[lu.supplier_name]?.trim() || null,
+    item_name:     raw[lu.item_name]?.trim()     || null,
+    quantity:      lu.quantity    !== undefined ? parseNum(raw[lu.quantity])     : null,
+    unit:          raw[lu.unit]?.trim()          || null,
+    base_amount:   lu.base_amount !== undefined ? parseNum(raw[lu.base_amount])  : null,
+    gst_amount:    lu.gst_amount  !== undefined ? parseNum(raw[lu.gst_amount])   : null,
+    total_amount:  parseNum(raw[lu.total_amount]),
+    material_type: raw[lu.material_type]?.trim().toUpperCase() || null,
+  };
+}
+
+// ─── Core ingest function ─────────────────────────────────────────────────────
+
+async function ingestFile(
+  file: File,
+  onProgress: (pct: number, done: number, total: number) => void
+): Promise<{ table: string; rowsInserted: number }> {
+  const kind = detectFileKind(file.name);
+  if (kind === 'unknown') {
+    throw new Error(
+      `Cannot detect file type from "${file.name}". ` +
+      'Rename it to include "Sales", "Purchase", "Item wise Sales", or "Item wise Purchase".'
+    );
+  }
+
+  const table = kind; // table name matches FileKind value
+
+  // 1. Read the whole file as text (≤25 MB so this is safe)
+  const text = await file.text();
+
+  // 2. Parse without headers first to find the actual header row
+  const rawResult = Papa.parse<string[]>(text, {
+    header:     false,
+    skipEmptyLines: true,
+  });
+  const rawRows = rawResult.data as string[][];
+
+  const colMap    = COL_MAP[kind];
+  const allAliases = Object.values(colMap).flat();
+  const headerIdx  = findHeaderRowIndex(rawRows, allAliases);
+  const headerRow  = rawRows[headerIdx] as string[];
+  const lu         = buildColLookup(headerRow, colMap);
+
+  const dataRows = rawRows.slice(headerIdx + 1).filter(isDataRow);
+  const total    = dataRows.length;
+
+  if (total === 0) throw new Error('No data rows found after the header row.');
+
+  // Required columns check
+  const required: Record<FileKind, string[]> = {
+    sales:           ['invoice_date', 'total_amount'],
+    purchase_orders: ['po_date', 'total_amount'],
+    sales_items:     ['invoice_date', 'total_amount'],
+    purchase_items:  ['invoice_date', 'total_amount'],
+    unknown:         [],
+  };
+  for (const col of required[kind]) {
+    if (lu[col] === undefined) {
+      throw new Error(
+        `Required column "${col}" not found in "${file.name}". ` +
+        `Headers detected: ${headerRow.join(', ')}`
+      );
+    }
+  }
+
+  // 3. Batch insert into Supabase
+  let inserted = 0;
+  for (let i = 0; i < total; i += BATCH_SIZE) {
+    const batch = dataRows.slice(i, i + BATCH_SIZE);
+
+    const rows = batch.map(raw => {
+      switch (kind) {
+        case 'sales':           return transformSalesRow(raw, lu);
+        case 'purchase_orders': return transformPurchaseRow(raw, lu);
+        case 'sales_items':     return transformSalesItemRow(raw, lu);
+        case 'purchase_items':  return transformPurchaseItemRow(raw, lu);
+      }
+    });
+
+    const { error } = await supabase.from(table).insert(rows);
+    if (error) {
+      throw new Error(`Supabase error on rows ${i}–${i + batch.length}: ${error.message}`);
+    }
+
+    inserted += batch.length;
+    onProgress(Math.round((inserted / total) * 100), inserted, total);
+  }
+
+  return { table, rowsInserted: inserted };
+}
+
+// ─── UI helpers ───────────────────────────────────────────────────────────────
+
+function fmt(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+const STATUS_META: Record<UploadStatus, { label: string; color: string; Icon: React.FC<{ className?: string }> }> = {
+  idle:      { label: 'Queued',    color: 'text-zinc-400',   Icon: ({ className }) => <FileText    className={className} /> },
+  parsing:   { label: 'Parsing',   color: 'text-blue-400',   Icon: ({ className }) => <Loader2     className={`${className} animate-spin`} /> },
+  inserting: { label: 'Inserting', color: 'text-amber-400',  Icon: ({ className }) => <Database    className={className} /> },
+  complete:  { label: 'Complete',  color: 'text-emerald-400',Icon: ({ className }) => <CheckCircle2 className={className} /> },
+  error:     { label: 'Error',     color: 'text-red-400',    Icon: ({ className }) => <XCircle     className={className} /> },
 };
 
-function StatusBadge({ status }: { status: UploadStatus }) {
-  const cfg = STATUS_CONFIG[status];
-  const isSpinning = ['requesting-url', 'uploading', 'processing'].includes(status);
+function JobRow({ job }: { job: UploadJob }) {
+  const { label, color, Icon } = STATUS_META[job.status];
   return (
-    <span
-      className="flex items-center gap-1.5 text-2xs px-2 py-1 rounded-full font-medium"
-      style={{ color: cfg.color, backgroundColor: cfg.bg }}
-    >
-      <cfg.Icon
-        size={11}
-        className={isSpinning ? 'animate-spin' : ''}
-      />
-      {cfg.label}
-    </span>
-  );
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// Upload job row
-// ────────────────────────────────────────────────────────────────────────────
-function JobRow({ job, onRemove }: { job: UploadJob; onRemove: (id: string) => void }) {
-  const isCSV     = job.filename.endsWith('.csv');
-  const isDone    = job.status === 'complete' || job.status === 'error';
-  const inFlight  = !isDone && job.status !== 'idle';
-
-  return (
-    <div className="glass-card p-4 space-y-3 animate-slide-up">
-      <div className="flex items-start gap-3">
-        {/* File icon */}
-        <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${isCSV ? 'bg-emerald-900/30 text-emerald-400' : 'bg-amber-900/30 text-amber-400'}`}>
-          {isCSV ? <FileText size={20} /> : <FileJson size={20} />}
+    <div className="flex flex-col gap-1 rounded-lg border border-white/10 bg-white/5 px-4 py-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <Icon className={`h-4 w-4 shrink-0 ${color}`} />
+          <span className="truncate text-sm text-white/90 font-medium">{job.filename}</span>
         </div>
-
-        <div className="flex-1 min-w-0">
-          <div className="flex items-start justify-between gap-2">
-            <p className="text-sm font-medium text-slate-200 truncate">{job.filename}</p>
-            {isDone && (
-              <button
-                onClick={() => onRemove(job.id)}
-                className="shrink-0 p-1 rounded text-slate-500 hover:text-slate-300 transition-colors"
-                aria-label="Remove"
-              >
-                <X size={13} />
-              </button>
-            )}
-          </div>
-
-          <div className="flex items-center gap-3 mt-1">
-            <span className="text-2xs text-slate-500 flex items-center gap-1">
-              <HardDrive size={10} />
-              {fmtBytes(job.file_size)}
-            </span>
-            <StatusBadge status={job.status} />
-          </div>
-
-          {job.s3_key && job.status === 'complete' && (
-            <p className="text-2xs font-mono text-slate-600 mt-1 truncate">
-              s3://…/{job.s3_key}
-            </p>
+        <div className="flex items-center gap-3 shrink-0">
+          {job.table && (
+            <span className="hidden sm:inline text-xs text-zinc-400 font-mono">→ {job.table}</span>
           )}
-
-          {job.error && (
-            <p className="text-2xs text-red-400 mt-1">{job.error}</p>
-          )}
+          <span className={`text-xs font-medium ${color}`}>{label}</span>
+          <span className="text-xs text-zinc-500">{fmt(job.file_size)}</span>
         </div>
       </div>
 
-      {/* Progress bar */}
-      {(inFlight || job.status === 'complete') && (
-        <div className="space-y-1">
-          <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
+      {(job.status === 'parsing' || job.status === 'inserting') && (
+        <div className="mt-1">
+          <div className="h-1 w-full rounded-full bg-white/10 overflow-hidden">
             <div
-              className="h-full rounded-full transition-all duration-300"
-              style={{
-                width: `${job.status === 'complete' ? 100 : job.progress}%`,
-                backgroundColor:
-                  job.status === 'complete'
-                    ? '#10b981'
-                    : job.status === 'uploading'
-                    ? '#6366f1'
-                    : '#8b5cf6',
-              }}
+              className="h-full rounded-full bg-amber-400 transition-all duration-300"
+              style={{ width: `${job.progress}%` }}
             />
           </div>
-          <div className="flex justify-between">
-            <span className="text-2xs text-slate-600">
-              {job.status === 'uploading' && `${job.progress}% uploaded`}
-              {job.status === 'requesting-url' && 'Generating secure upload URL…'}
-              {job.status === 'processing' && 'S3 event triggered — Lambda parsing rows…'}
-              {job.status === 'complete' && `Ingestion complete · ${job.completed_at ? new Date(job.completed_at).toLocaleTimeString() : ''}`}
-            </span>
-            {job.status === 'uploading' && (
-              <span className="text-2xs text-indigo-400 font-mono">{job.progress}%</span>
-            )}
-          </div>
+          {job.rows_total !== undefined && (
+            <p className="mt-1 text-xs text-zinc-500">
+              {job.rows_done?.toLocaleString()} / {job.rows_total.toLocaleString()} rows
+            </p>
+          )}
         </div>
       )}
-    </div>
-  );
-}
 
-// ────────────────────────────────────────────────────────────────────────────
-// CSV schema reference card
-// ────────────────────────────────────────────────────────────────────────────
-function SchemaReference() {
-  return (
-    <div className="glass-card p-4">
-      <div className="flex items-center gap-2 mb-3">
-        <Info size={14} className="text-emerald-400" />
-        <h3 className="text-sm font-semibold text-slate-200">Supported SGS Exports</h3>
-      </div>
-      <div className="overflow-x-auto scrollbar-hide">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="border-b border-slate-700">
-              {['File', 'Loaded Into', 'Key Fields'].map((h) => (
-                <th key={h} className="text-left text-2xs text-slate-500 uppercase tracking-wide pb-2 pr-4">
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-800/60">
-            {[
-              { file: 'Sales.csv',              table: 'sales',          fields: 'Invoice, date, customer, amount' },
-              { file: 'Purchase.csv',           table: 'purchases',      fields: 'Invoice, date, supplier, amount' },
-              { file: 'Item wise sales.csv',    table: 'sales_items',    fields: 'Item, quantity, GST, total' },
-              { file: 'Item wise purchase.csv', table: 'purchase_items', fields: 'Item, quantity, GST, total' },
-              { file: 'Customers.csv',          table: 'customers',      fields: 'Customer name, GSTIN when present' },
-              { file: 'Suppliers.csv',          table: 'suppliers',      fields: 'Supplier name, GSTIN when present' },
-            ].map(({ file, table, fields }) => (
-              <tr key={file}>
-                <td className="py-1.5 pr-4 font-mono text-emerald-300">{file}</td>
-                <td className="py-1.5 pr-4 text-slate-400">{table}</td>
-                <td className="py-1.5 text-slate-500">{fields}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <p className="text-2xs text-slate-600 mt-3">
-        Upload the raw accounting exports as-is. The parser handles repeated report headers, quoted amounts, and multiline customer/supplier details. Max {MAX_FILE_SIZE_MB} MB per file.
-      </p>
-    </div>
-  );
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// Drop zone
-// ────────────────────────────────────────────────────────────────────────────
-function DropZone({ onFiles }: { onFiles: (files: File[]) => void }) {
-  const [dragging, setDragging] = useState(false);
-  const inputId    = useId();
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const processFiles = (fileList: FileList | File[]) => {
-    const files = Array.from(fileList).filter((f) => getFileType(f) !== null);
-    if (files.length) onFiles(files);
-  };
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragging(true);
-  };
-  const handleDragLeave = (e: React.DragEvent) => {
-    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-      setDragging(false);
-    }
-  };
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragging(false);
-    processFiles(e.dataTransfer.files);
-  };
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      processFiles(e.target.files);
-      e.target.value = '';
-    }
-  };
-
-  return (
-    <div
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-      onClick={() => fileInputRef.current?.click()}
-      className={`
-        relative cursor-pointer select-none rounded-2xl border-2 border-dashed
-        transition-all duration-200 p-6 sm:p-10 flex flex-col items-center justify-center gap-3 sm:gap-4
-        ${dragging
-          ? 'border-indigo-400 bg-indigo-950/40 scale-[1.01]'
-          : 'border-slate-700 bg-slate-900/40 hover:border-slate-500 hover:bg-slate-900/60'
-        }
-      `}
-      role="button"
-      aria-label="Upload CSV or JSON file"
-      tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') fileInputRef.current?.click(); }}
-    >
-      <input
-        id={inputId}
-        ref={fileInputRef}
-        type="file"
-        multiple
-        accept=".csv,.json,text/csv,application/json"
-        onChange={handleInputChange}
-        className="sr-only"
-        aria-hidden="true"
-      />
-
-      <div
-        className={`
-          w-12 h-12 sm:w-16 sm:h-16 rounded-2xl flex items-center justify-center transition-all duration-200
-          ${dragging ? 'bg-indigo-500/20 text-indigo-300 scale-110' : 'bg-slate-800 text-slate-400'}
-        `}
-      >
-        <CloudUpload size={24} />
-      </div>
-
-      <div className="text-center px-4">
-        <p className="text-sm sm:text-base font-semibold text-slate-200">
-          {dragging ? 'Drop to upload' : 'Drop files here'}
+      {job.status === 'complete' && job.rows_done !== undefined && (
+        <p className="text-xs text-zinc-400">
+          {job.rows_done.toLocaleString()} rows inserted into <span className="font-mono">{job.table}</span>
         </p>
-        <p className="text-xs sm:text-sm text-slate-400 mt-1">
-          or <span className="text-indigo-400 underline underline-offset-2">click to browse</span>
-        </p>
-        <p className="text-2xs text-slate-600 mt-2">
-          .csv · .json · Up to {MAX_FILE_SIZE_MB} MB each · Multiple files supported
-        </p>
-      </div>
+      )}
 
-      {dragging && (
-        <div className="absolute inset-0 rounded-2xl bg-indigo-500/5 pointer-events-none" />
+      {job.status === 'error' && job.error && (
+        <p className="text-xs text-red-400 break-words">{job.error}</p>
       )}
     </div>
   );
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// DataIngestion main
-// ────────────────────────────────────────────────────────────────────────────
+// ─── Main component ───────────────────────────────────────────────────────────
+
+function uid() {
+  return Math.random().toString(36).slice(2, 10);
+}
+
 export default function DataIngestion() {
-  const [jobs, setJobs] = useState<UploadJob[]>([]);
-  const push = useNotificationStore((s) => s.push);
+  const [jobs, setJobs]   = useState<UploadJob[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const push        = useNotificationStore((s) => s.push);
+  const queryClient = useQueryClient();
 
-  const updateJob = useCallback(
-    (id: string, patch: Partial<UploadJob>) => {
-      setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, ...patch } : j)));
-    },
-    [],
-  );
-
-  const removeJob = useCallback((id: string) => {
-    setJobs((prev) => prev.filter((j) => j.id !== id));
+  const updateJob = useCallback((id: string, patch: Partial<UploadJob>) => {
+    setJobs(prev => prev.map(j => j.id === id ? { ...j, ...patch } : j));
   }, []);
 
-  const handleFiles = useCallback(
-    async (files: File[]) => {
-      // Validate first; add all jobs optimistically
-      const newJobs: UploadJob[] = files.map((file) => {
-        const validationError = validateFile(file);
-        return {
-          id:         uuidv4(),
-          filename:   file.name,
-          file_size:  file.size,
-          status:     validationError ? 'error' : 'idle',
-          progress:   0,
-          error:      validationError ?? undefined,
-          started_at: new Date().toISOString(),
-        } as UploadJob;
+  const processFiles = useCallback(async (files: File[]) => {
+    const csvFiles = files.filter(f => f.name.endsWith('.csv') || f.type === 'text/csv');
+    if (csvFiles.length === 0) {
+      push({ type: 'warning', title: 'No CSV files', message: 'Only .csv files are supported.' });
+      return;
+    }
+
+    const oversized = csvFiles.filter(f => f.size > PARSE_LIMIT_BYTES);
+    if (oversized.length > 0) {
+      push({
+        type:    'warning',
+        title:   'File too large',
+        message: `Files over ${PARSE_LIMIT_MB} MB cannot be processed in the browser: ${oversized.map(f => f.name).join(', ')}`,
       });
+    }
 
-      setJobs((prev) => [...newJobs, ...prev]);
+    const eligible = csvFiles.filter(f => f.size <= PARSE_LIMIT_BYTES);
+    if (eligible.length === 0) return;
 
-      // Process only valid ones
-      for (let i = 0; i < newJobs.length; i++) {
-        const job  = newJobs[i];
-        const file = files[i];
-        if (job.status === 'error') continue;
+    // Create job entries immediately so UI updates
+    const newJobs: UploadJob[] = eligible.map(f => ({
+      id:         uid(),
+      filename:   f.name,
+      file_size:  f.size,
+      status:     'idle',
+      progress:   0,
+      started_at: new Date().toISOString(),
+    }));
+    setJobs(prev => [...newJobs, ...prev]);
 
-        try {
-          // Step 1: Request pre-signed URL
-          updateJob(job.id, { status: 'requesting-url' });
+    // Process sequentially to avoid hammering Supabase
+    for (const [i, file] of eligible.entries()) {
+      const job = newJobs[i];
 
-          const contentType =
-            file.type === 'application/json' ? 'application/json' : 'text/csv';
+      try {
+        updateJob(job.id, { status: 'parsing', progress: 0 });
 
-          const { upload_url, key } = await requestPresignedUrl({
-            filename:     file.name,
-            content_type: contentType,
-            file_size:    file.size,
-          });
-
-          // Step 2: Stream-upload directly to S3
-          updateJob(job.id, { status: 'uploading', progress: 0 });
-
-          await uploadFileToS3(upload_url, file, (pct) => {
-            updateJob(job.id, { progress: pct });
-          });
-
-          // Step 3: S3 event triggers Lambda automatically; we show "processing"
-          updateJob(job.id, { status: 'processing', progress: 100, s3_key: key });
-
-          // Optimistically transition to complete after a short delay
-          // (real status would come from a polling endpoint in a full impl)
-          setTimeout(() => {
+        const { table, rowsInserted } = await ingestFile(
+          file,
+          (pct, done, total) => {
             updateJob(job.id, {
-              status:       'complete',
-              completed_at: new Date().toISOString(),
+              status:     'inserting',
+              progress:   pct,
+              rows_done:  done,
+              rows_total: total,
+              table,
             });
-            push({
-              type:    'success',
-              title:   'Ingestion complete',
-              message: `${file.name} has been processed and stored in DynamoDB.`,
-            });
-          }, 4000);
-        } catch (err) {
-          updateJob(job.id, {
-            status: 'error',
-            error:  (err as Error)?.message ?? 'Upload failed',
-          });
-          push({
-            type:    'error',
-            title:   'Upload failed',
-            message: `${file.name}: ${(err as Error)?.message ?? 'Unknown error'}`,
-          });
-        }
-      }
-    },
-    [updateJob, push],
-  );
+          }
+        );
 
-  const activeJobs    = jobs.filter((j) => !['complete', 'error'].includes(j.status));
-  const completedJobs = jobs.filter((j) => j.status === 'complete');
-  const errorJobs     = jobs.filter((j) => j.status === 'error');
+        updateJob(job.id, {
+          status:       'complete',
+          progress:     100,
+          rows_done:    rowsInserted,
+          table,
+          completed_at: new Date().toISOString(),
+        });
+
+        push({
+          type:    'success',
+          title:   'Ingestion complete',
+          message: `${file.name} → ${rowsInserted.toLocaleString()} rows inserted into "${table}". Dashboard refreshing…`,
+        });
+
+        // Invalidate all dashboard queries so they refetch fresh data
+        queryClient.invalidateQueries({ queryKey: ['analytics-summary'] });
+        queryClient.invalidateQueries({ queryKey: ['sales-purchase-table'] });
+
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        updateJob(job.id, { status: 'error', error: message });
+        push({ type: 'error', title: `Failed: ${file.name}`, message });
+      }
+    }
+  }, [updateJob, push, queryClient]);
+
+  // ── Drag-and-drop handlers ──
+  const onDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragging(false);
+    processFiles(Array.from(e.dataTransfer.files));
+  }, [processFiles]);
+
+  const onDragOver = (e: React.DragEvent) => { e.preventDefault(); setDragging(true); };
+  const onDragLeave = () => setDragging(false);
+
+  const onFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) processFiles(Array.from(e.target.files));
+    e.target.value = '';
+  };
+
+  const inputId = 'csv-upload-input';
 
   return (
-    <div className="max-w-4xl space-y-4 sm:space-y-6">
-      {/* Page header */}
+    <div className="flex flex-col gap-6 p-6">
       <div>
-        <h2 className="text-lg sm:text-xl font-bold text-slate-100">Data Ingestion</h2>
-        <p className="text-xs sm:text-sm text-slate-400 mt-0.5">
-          Upload sales CSV or JSON files directly to S3 — Lambda parses and stores records in DynamoDB automatically.
+        <h1 className="text-2xl font-bold text-white">Data Ingestion</h1>
+        <p className="mt-1 text-sm text-zinc-400">
+          Drop CSV exports from Tally / Busy. Rows are parsed in the browser
+          and inserted directly into Supabase — no S3 required.
+          Max {PARSE_LIMIT_MB} MB per file.
         </p>
-      </div>
-
-      {/* Pipeline info banner */}
-      <div className="flex items-start gap-3 px-3 sm:px-4 py-3 rounded-xl bg-indigo-950/40 border border-indigo-800/40">
-        <Info size={14} className="text-indigo-400 shrink-0 mt-0.5" />
-        <div className="text-xs text-indigo-300/80 space-y-0.5">
-          <p className="font-semibold text-indigo-300">Secure upload pipeline</p>
-          <p className="hidden sm:block">Files are uploaded directly to S3 via a short-lived pre-signed URL — bypassing the API Gateway entirely for large files. The ingestion Lambda is triggered automatically via S3 ObjectCreated events and batch-writes records to DynamoDB.</p>
-          <p className="sm:hidden">Upload directly to S3. Lambda automatically parses and stores in DynamoDB.</p>
-        </div>
       </div>
 
       {/* Drop zone */}
-      <DropZone onFiles={handleFiles} />
-
-      {/* Active uploads */}
-      {activeJobs.length > 0 && (
-        <div className="space-y-3">
-          <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide flex items-center gap-2">
-            <Loader2 size={12} className="animate-spin text-indigo-400" />
-            In Progress ({activeJobs.length})
-          </h3>
-          {activeJobs.map((job) => (
-            <JobRow key={job.id} job={job} onRemove={removeJob} />
-          ))}
-        </div>
-      )}
-
-      {/* Error jobs */}
-      {errorJobs.length > 0 && (
-        <div className="space-y-3">
-          <h3 className="text-xs font-semibold text-red-400 uppercase tracking-wide flex items-center gap-2">
-            <AlertCircle size={12} />
-            Failed ({errorJobs.length})
-          </h3>
-          {errorJobs.map((job) => (
-            <JobRow key={job.id} job={job} onRemove={removeJob} />
-          ))}
-        </div>
-      )}
-
-      {/* Completed jobs */}
-      {completedJobs.length > 0 && (
-        <div className="space-y-3">
-          <h3 className="text-xs font-semibold text-emerald-400 uppercase tracking-wide flex items-center gap-2">
-            <CheckCircle2 size={12} />
-            Completed ({completedJobs.length})
-          </h3>
-          {completedJobs.map((job) => (
-            <JobRow key={job.id} job={job} onRemove={removeJob} />
-          ))}
-        </div>
-      )}
+      <label
+        htmlFor={inputId}
+        onDrop={onDrop}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-10 transition-colors ${
+          dragging
+            ? 'border-amber-400 bg-amber-400/10'
+            : 'border-white/20 bg-white/5 hover:border-white/40 hover:bg-white/10'
+        }`}
+      >
+        <UploadCloud className={`h-10 w-10 ${dragging ? 'text-amber-400' : 'text-zinc-400'}`} />
+        <p className="text-sm text-zinc-300">
+          <span className="font-semibold text-white">Click to browse</span> or drag &amp; drop CSV files
+        </p>
+        <input
+          id={inputId}
+          type="file"
+          accept=".csv,text/csv"
+          multiple
+          className="sr-only"
+          onChange={onFileInput}
+        />
+      </label>
 
       {/* Schema reference */}
-      <SchemaReference />
+      <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+        <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-400">
+          Expected file names → Supabase table
+        </p>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {[
+            { file: 'Sales.csv',               table: 'sales',           desc: 'Invoice-level sales' },
+            { file: 'Purchase.csv',             table: 'purchase_orders', desc: 'Invoice-level purchases' },
+            { file: 'Item wise Sales.csv',      table: 'sales_items',     desc: 'Line-item sales detail' },
+            { file: 'Item wise Purchase.csv',   table: 'purchase_items',  desc: 'Line-item purchase detail' },
+          ].map(({ file, table, desc }) => (
+            <div key={table} className="flex items-start gap-2 text-xs">
+              <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+              <span>
+                <span className="font-mono text-white">{file}</span>
+                <span className="text-zinc-400"> → </span>
+                <span className="font-mono text-emerald-400">{table}</span>
+                <span className="text-zinc-500"> — {desc}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 flex items-start gap-2 rounded-md bg-amber-400/10 px-3 py-2">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+          <p className="text-xs text-amber-200">
+            Re-uploading the same file will insert duplicate rows. Clear existing data
+            from Supabase before re-ingesting the same period.
+          </p>
+        </div>
+      </div>
+
+      {/* Job list */}
+      {jobs.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+            Jobs — {jobs.length}
+          </p>
+          {jobs.map(j => <JobRow key={j.id} job={j} />)}
+        </div>
+      )}
     </div>
   );
 }
