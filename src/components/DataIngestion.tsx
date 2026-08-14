@@ -376,30 +376,43 @@ async function ingestFile(
   }
 
   // Upsert in batches — same conflict columns as the Lambda.
-  // Item tables (sales_items, purchase_items) use an RPC function that runs
-  // INSERT ... ON CONFLICT (row_key) DO NOTHING at the DB level, bypassing
-  // the Supabase JS client's DELETE+INSERT strategy that causes
-  // "DELETE requires a WHERE clause". All other tables use standard upsert.
+  // Item tables use a raw PostgREST fetch with Prefer: resolution=ignore-duplicates
+  // to emit ON CONFLICT DO NOTHING without going through the Supabase JS client
+  // upsert path that triggers "DELETE requires a WHERE clause".
   const grouped      = groupByTable(records);
   const totalRows    = records.length;
   let   inserted     = 0;
   const tableNames: string[] = [];
 
+  // Retrieve PostgREST URL + anon key from the supabase client internals
+  const supabaseUrl = (supabase as any).supabaseUrl as string;
+  const supabaseKey = (supabase as any).supabaseKey as string;
+
   for (const [table, rows] of grouped) {
     tableNames.push(table);
-    const conflictCol  = CONFLICT_COL[table];
-    const isItemTable  = table === 'sales_items' || table === 'purchase_items';
+    const conflictCol = CONFLICT_COL[table];
+    const isItemTable = table === 'sales_items' || table === 'purchase_items';
 
     for (let i = 0; i < rows.length; i += BATCH_SIZE) {
       const batch = rows.slice(i, i + BATCH_SIZE);
 
       if (isItemTable) {
-        // RPC bypasses JS client upsert — plain INSERT … ON CONFLICT DO NOTHING
-        const { error } = await supabase.rpc('upsert_items', {
-          p_table: table,
-          p_rows:  batch,   // pass array directly — supabase-js serialises as JSONB array
+        // Raw PostgREST: POST with resolution=ignore-duplicates
+        // True INSERT … ON CONFLICT (row_key) DO NOTHING — no DELETE involved
+        const res = await fetch(`${supabaseUrl}/rest/v1/${table}`, {
+          method:  'POST',
+          headers: {
+            'Content-Type':  'application/json',
+            'apikey':        supabaseKey,
+            'Authorization': `Bearer ${supabaseKey}`,
+            'Prefer':        'resolution=ignore-duplicates,return=minimal',
+          },
+          body: JSON.stringify(batch),
         });
-        if (error) throw new Error(`${table}: ${error.message}`);
+        if (!res.ok) {
+          const msg = await res.text();
+          throw new Error(`${table}: ${msg}`);
+        }
       } else {
         const { error } = await supabase
           .from(table)
