@@ -384,12 +384,6 @@ async function ingestFile(
   let   inserted     = 0;
   const tableNames: string[] = [];
 
-  // Retrieve PostgREST URL + current user session token for RLS compliance
-  const supabaseUrl = (supabase as any).supabaseUrl as string;
-  const supabaseKey = (supabase as any).supabaseKey as string;
-  const { data: { session } } = await supabase.auth.getSession();
-  const authToken = session?.access_token ?? supabaseKey;
-
   for (const [table, rows] of grouped) {
     tableNames.push(table);
     const conflictCol = CONFLICT_COL[table];
@@ -399,21 +393,24 @@ async function ingestFile(
       const batch = rows.slice(i, i + BATCH_SIZE);
 
       if (isItemTable) {
-        // Raw PostgREST: POST with resolution=ignore-duplicates
-        // True INSERT … ON CONFLICT (row_key) DO NOTHING — no DELETE involved
-        const res = await fetch(`${supabaseUrl}/rest/v1/${table}`, {
-          method:  'POST',
-          headers: {
-            'Content-Type':  'application/json',
-            'apikey':        supabaseKey,
-            'Authorization': `Bearer ${authToken}`,
-            'Prefer':        'resolution=ignore-duplicates,return=minimal',
-          },
-          body: JSON.stringify(batch),
-        });
-        if (!res.ok) {
-          const msg = await res.text();
-          throw new Error(`${table}: ${msg}`);
+        // Pre-filter duplicates client-side: fetch existing row_keys for this
+        // batch, then only INSERT rows that don't already exist. This avoids
+        // every PostgREST upsert/conflict strategy that triggers DELETE.
+        const batchKeys = batch.map(r => (r as any).row_key as string);
+        const { data: existing, error: fetchErr } = await supabase
+          .from(table)
+          .select('row_key')
+          .in('row_key', batchKeys);
+        if (fetchErr) throw new Error(`${table}: ${fetchErr.message}`);
+
+        const existingSet = new Set((existing ?? []).map((r: any) => r.row_key));
+        const newRows     = batch.filter(r => !existingSet.has((r as any).row_key));
+
+        if (newRows.length > 0) {
+          const { error: insertErr } = await supabase
+            .from(table)
+            .insert(newRows);
+          if (insertErr) throw new Error(`${table}: ${insertErr.message}`);
         }
       } else {
         const { error } = await supabase
