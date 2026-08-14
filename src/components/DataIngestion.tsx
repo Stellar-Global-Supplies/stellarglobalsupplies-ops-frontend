@@ -384,9 +384,11 @@ async function ingestFile(
   let   inserted     = 0;
   const tableNames: string[] = [];
 
-  // Retrieve PostgREST URL + anon key from the supabase client internals
+  // Retrieve PostgREST URL + current user session token for RLS compliance
   const supabaseUrl = (supabase as any).supabaseUrl as string;
   const supabaseKey = (supabase as any).supabaseKey as string;
+  const { data: { session } } = await supabase.auth.getSession();
+  const authToken = session?.access_token ?? supabaseKey;
 
   for (const [table, rows] of grouped) {
     tableNames.push(table);
@@ -404,7 +406,7 @@ async function ingestFile(
           headers: {
             'Content-Type':  'application/json',
             'apikey':        supabaseKey,
-            'Authorization': `Bearer ${supabaseKey}`,
+            'Authorization': `Bearer ${authToken}`,
             'Prefer':        'resolution=ignore-duplicates,return=minimal',
           },
           body: JSON.stringify(batch),
