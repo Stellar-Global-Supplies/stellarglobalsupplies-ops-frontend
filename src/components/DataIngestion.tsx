@@ -262,6 +262,7 @@ async function parseSalesItem(record: string[], sourceFile: string): Promise<Par
       gst_amount:    gstAmount,
       total_amount:  totalAmount,
       source_file:   sourceFile,
+      created_at:    new Date().toISOString(),
     },
   };
 }
@@ -302,6 +303,7 @@ async function parsePurchaseItem(record: string[], sourceFile: string): Promise<
       gst_amount:    gstAmount,
       total_amount:  totalAmount,
       source_file:   sourceFile,
+      created_at:    new Date().toISOString(),
     },
   };
 }
