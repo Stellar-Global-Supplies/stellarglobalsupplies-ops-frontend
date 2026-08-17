@@ -1,26 +1,9 @@
 import { useEffect, useState } from 'react';
 import {
-  LayoutDashboard,
-  Upload,
-  BarChart3,
-  Menu,
-  X,
-  Bell,
-  Megaphone,
-  Wifi,
-  WifiOff,
-  ChevronRight,
-  LogOut,
-  Sparkles,
-  Package,
-  FileText,
-  CheckSquare,
-  Zap,
-  Shield,
-  ClipboardList,
-  Sun,
-  Moon,
-  Mail,
+  LayoutDashboard, Upload, BarChart3, Menu, X, Bell,
+  Megaphone, Wifi, WifiOff, ChevronRight, LogOut, Sparkles,
+  Package, FileText, CheckSquare, Zap, Shield, ClipboardList,
+  Sun, Moon, Mail,
 } from 'lucide-react';
 import type { Session } from '@supabase/supabase-js';
 import type { LucideIcon } from 'lucide-react';
@@ -33,12 +16,17 @@ import DataIngestion from '@/components/DataIngestion';
 import Analytics from '@/components/Analytics';
 import InventoryDashboard from '@/components/InventoryDashboard';
 import SalesPurchaseTable from '@/components/SalesPurchaseTable';
-import AuthPage from '@/components/AuthPage';
+// ✅ AuthPage removed — SSO replaces it
+import SSOCallback from '@/components/SSOCallback';
 import TasksPage from '@/pages/tasks/TasksPage';
 import OrderSummaryDashboard from '@/components/OrderSummaryDashboard';
 import QuotationsDashboard from '@/components/QuotationsDashboard';
 import EmailCampaignWidget from '@/components/EmailCampaignWidget';
 import { setUser, clearUser, recordNavigation } from '@/tracing';
+
+// ── Where the landing page lives ──────────────────────────────────────────────
+const LANDING_URL = (import.meta.env.VITE_LANDING_URL as string | undefined)
+  ?? 'https://portal.stellarglobalsupplies.com';
 
 interface NavItem {
   section: NavSection;
@@ -48,19 +36,19 @@ interface NavItem {
 }
 
 const CEO_ITEMS: NavItem[] = [
-  { section: 'dashboard',          label: 'Command Center',    Icon: LayoutDashboard, badge: 'LIVE' },
-  { section: 'email',              label: 'Email Campaign',    Icon: Mail             },
-  { section: 'ingest',             label: 'Data Ingest',       Icon: Upload           },
-  { section: 'inventory',          label: 'Inventory',         Icon: Package          },
-  { section: 'analytics',          label: 'Analytics',         Icon: BarChart3        },
-  { section: 'registers',          label: 'Sales & Purchase',  Icon: FileText         },
-  { section: 'meta',               label: 'Meta Marketing',    Icon: Megaphone        },
-  { section: 'tasks',              label: 'Tasks',             Icon: CheckSquare      },
-  { section: 'orders',             label: 'Order Summary',     Icon: ClipboardList    },
-  { section: 'quotations',         label: 'Quotations',        Icon: FileText         },
+  { section: 'dashboard',  label: 'Command Center',   Icon: LayoutDashboard, badge: 'LIVE' },
+  { section: 'email',      label: 'Email Campaign',   Icon: Mail             },
+  { section: 'ingest',     label: 'Data Ingest',      Icon: Upload           },
+  { section: 'inventory',  label: 'Inventory',        Icon: Package          },
+  { section: 'analytics',  label: 'Analytics',        Icon: BarChart3        },
+  { section: 'registers',  label: 'Sales & Purchase', Icon: FileText         },
+  { section: 'meta',       label: 'Meta Marketing',   Icon: Megaphone        },
+  { section: 'tasks',      label: 'Tasks',            Icon: CheckSquare      },
+  { section: 'orders',     label: 'Order Summary',    Icon: ClipboardList    },
+  { section: 'quotations', label: 'Quotations',       Icon: FileText         },
 ];
 
-// ─── Notification Toasts ─────────────────────────────────────────────────────
+// ─── Notification Toasts ──────────────────────────────────────────────────────
 function NotificationToasts() {
   const { notifications, dismiss } = useNotificationStore();
   if (notifications.length === 0) return null;
@@ -72,23 +60,14 @@ function NotificationToasts() {
     info:    'border-cyan-400/30 bg-cyan-950/80 shadow-cyan-900/40',
   };
   const dotMap = {
-    success: 'bg-emerald-400',
-    error:   'bg-red-400',
-    warning: 'bg-amber-400',
-    info:    'bg-cyan-400',
+    success: 'bg-emerald-400', error: 'bg-red-400',
+    warning: 'bg-amber-400',   info:  'bg-cyan-400',
   };
 
   return (
     <div className="fixed bottom-5 right-5 z-[100] flex flex-col gap-2.5 max-w-sm w-full pointer-events-none">
       {notifications.map((n) => (
-        <div
-          key={n.id}
-          className={`
-            pointer-events-auto flex items-start gap-3 p-4 rounded-2xl border
-            backdrop-blur-2xl shadow-2xl animate-slide-up
-            ${colorMap[n.type]}
-          `}
-        >
+        <div key={n.id} className={`pointer-events-auto flex items-start gap-3 p-4 rounded-2xl border backdrop-blur-2xl shadow-2xl animate-slide-up ${colorMap[n.type]}`}>
           <div className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${dotMap[n.type]}`} />
           <div className="flex-1 min-w-0">
             <p className="text-sm font-bold text-slate-100 truncate">{n.title}</p>
@@ -103,7 +82,7 @@ function NotificationToasts() {
   );
 }
 
-// ─── Sidebar ─────────────────────────────────────────────────────────────────
+// ─── Sidebar ──────────────────────────────────────────────────────────────────
 function Sidebar({ session }: { session: Session | null }) {
   const { activeSection, setSection, sidebarOpen, toggleSidebar } = useNavStore();
   const [time, setTime] = useState(new Date());
@@ -118,31 +97,16 @@ function Sidebar({ session }: { session: Session | null }) {
   return (
     <>
       {sidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black/70 backdrop-blur-md z-20 lg:hidden"
-          onClick={toggleSidebar}
-          aria-hidden="true"
-        />
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-20 lg:hidden" onClick={toggleSidebar} aria-hidden="true" />
       )}
-
-      <aside
-        className={`
-          app-sidebar fixed top-0 left-0 h-full z-30 flex flex-col
-          transition-all duration-300 ease-in-out
-          ${sidebarOpen ? 'w-sidebar' : 'w-sidebar-sm'}
-          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
-        `}
-      >
-        {/* Logo Header */}
+      <aside className={`app-sidebar fixed top-0 left-0 h-full z-30 flex flex-col transition-all duration-300 ease-in-out ${sidebarOpen ? 'w-sidebar' : 'w-sidebar-sm'} ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
         <div className="flex items-center gap-3 px-4 h-[64px] border-b shrink-0" style={{ borderColor: 'rgba(0,185,142,0.12)' }}>
           <div className="sidebar-logo-ring">
             <Sparkles size={16} style={{ color: '#00B98E', position: 'relative', zIndex: 1 }} />
           </div>
           {sidebarOpen && (
             <div className="overflow-hidden">
-              <p className="text-sm font-extrabold tracking-tight" style={{ color: '#e2fdf6', letterSpacing: '-0.01em' }}>
-                SGS Ops
-              </p>
+              <p className="text-sm font-extrabold tracking-tight" style={{ color: '#e2fdf6', letterSpacing: '-0.01em' }}>SGS Ops</p>
               <p className="text-2xs font-mono" style={{ color: 'rgba(0,185,142,0.55)' }}>{timeStr}</p>
             </div>
           )}
@@ -152,8 +116,6 @@ function Sidebar({ session }: { session: Session | null }) {
             </button>
           )}
         </div>
-
-        {/* Status bar */}
         {sidebarOpen && (
           <div className="px-4 py-2.5 border-b" style={{ borderColor: 'rgba(0,185,142,0.08)', background: 'rgba(0,185,142,0.03)' }}>
             <div className="flex items-center justify-between">
@@ -165,8 +127,6 @@ function Sidebar({ session }: { session: Session | null }) {
             </div>
           </div>
         )}
-
-        {/* Navigation */}
         <nav className="flex-1 px-2 py-4 overflow-y-auto scrollbar-hide space-y-0.5">
           <div className={`nav-section-label ${!sidebarOpen ? 'text-center' : ''}`}>
             {sidebarOpen ? 'CEO Suite' : '—'}
@@ -194,18 +154,10 @@ function Sidebar({ session }: { session: Session | null }) {
                   </>
                 )}
                 <div className="nav-indicator" />
-                {!sidebarOpen && (
-                  <span className="absolute left-full ml-3 px-3 py-1.5 text-xs font-semibold rounded-xl whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50"
-                    style={{ background: 'rgba(4,14,28,0.96)', border: '1px solid rgba(0,185,142,0.25)', color: '#e2fdf6', boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }}>
-                    {label}
-                  </span>
-                )}
               </button>
             );
           })}
         </nav>
-
-        {/* Footer User */}
         <div className="px-2 pb-4 border-t pt-3 shrink-0" style={{ borderColor: 'rgba(0,185,142,0.10)' }}>
           {sidebarOpen ? (
             <div className="flex items-center gap-3 px-3 py-2 rounded-xl" style={{ background: 'rgba(0,185,142,0.05)' }}>
@@ -235,7 +187,7 @@ function Sidebar({ session }: { session: Session | null }) {
 
 function getInitials(email?: string | null): string {
   if (!email) return '??';
-  const name = email.split('@')[0];
+  const name  = email.split('@')[0];
   if (!name) return '??';
   const parts = name.split(/[._-]/);
   if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
@@ -253,7 +205,7 @@ function getDisplayName(user: import('@supabase/supabase-js').User | undefined):
   return 'User';
 }
 
-// ─── Header ──────────────────────────────────────────────────────────────────
+// ─── Header ───────────────────────────────────────────────────────────────────
 function Header() {
   const { activeSection, sidebarOpen, toggleSidebar } = useNavStore();
   const { notifications } = useNotificationStore();
@@ -263,16 +215,14 @@ function Header() {
   const activeItem   = CEO_ITEMS.find((n) => n.section === activeSection);
   const sectionLabel = activeItem?.label ?? '';
 
+  // ✅ Sign-out: end Supabase session then return to portal
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    window.location.replace(LANDING_URL);
+  };
+
   return (
-    <header
-      className={`
-        app-header fixed top-0 right-0 z-10
-        flex items-center gap-3 px-3 md:px-6
-        transition-all duration-300
-        ${sidebarOpen ? 'left-sidebar' : 'left-sidebar-sm'}
-        max-lg:left-0
-      `}
-    >
+    <header className={`app-header fixed top-0 right-0 z-10 flex items-center gap-3 px-3 md:px-6 transition-all duration-300 ${sidebarOpen ? 'left-sidebar' : 'left-sidebar-sm'} max-lg:left-0`}>
       <button
         onClick={toggleSidebar}
         className="touch-target p-2 rounded-xl transition-all duration-200 flex items-center justify-center"
@@ -283,27 +233,20 @@ function Header() {
       >
         <Menu size={18} />
       </button>
-
       <div className="flex items-center gap-2 flex-1 min-w-0">
         <span className="text-2xs font-mono text-slate-600 hidden sm:inline">SGS</span>
         <ChevronRight size={10} className="text-slate-700 hidden sm:block" />
         <h1 className="text-sm font-bold text-slate-200 truncate">{sectionLabel}</h1>
       </div>
-
       <div className="flex items-center gap-1 sm:gap-2">
         <OnlineStatus />
         <div className="hidden sm:block w-px h-5 bg-white/8" />
-        <button
-          onClick={toggleTheme}
-          className="touch-target p-2 rounded-xl text-slate-500 hover:text-slate-200 transition-colors flex items-center justify-center"
-          aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-        >
+        <button onClick={toggleTheme} className="touch-target p-2 rounded-xl text-slate-500 hover:text-slate-200 transition-colors flex items-center justify-center"
+          aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
           {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
         </button>
-        <button
-          className="touch-target relative p-2 rounded-xl text-slate-500 hover:text-slate-200 transition-colors flex items-center justify-center"
-          aria-label={`${unread} notifications`}
-        >
+        <button className="touch-target relative p-2 rounded-xl text-slate-500 hover:text-slate-200 transition-colors flex items-center justify-center"
+          aria-label={`${unread} notifications`}>
           <Bell size={17} />
           {unread > 0 && (
             <span className="absolute top-1 right-1 w-4 h-4 rounded-full text-2xs text-slate-950 flex items-center justify-center font-black"
@@ -312,11 +255,12 @@ function Header() {
             </span>
           )}
         </button>
+        {/* ✅ Fixed sign-out: signs out of Supabase + redirects to portal */}
         <button
-          onClick={() => supabase.auth.signOut()}
+          onClick={handleSignOut}
           className="touch-target p-2 rounded-xl text-slate-500 hover:text-red-400 transition-colors flex items-center justify-center"
           aria-label="Sign out"
-          title="Sign out"
+          title="Sign out to portal"
         >
           <LogOut size={17} />
         </button>
@@ -336,9 +280,7 @@ function OnlineStatus() {
   }, []);
 
   return online ? (
-    <div className="hidden sm:flex items-center gap-1.5 header-pill">
-      <Wifi size={10} /><span>Online</span>
-    </div>
+    <div className="hidden sm:flex items-center gap-1.5 header-pill"><Wifi size={10} /><span>Online</span></div>
   ) : (
     <div className="hidden sm:flex items-center gap-1.5 header-pill" style={{ borderColor: 'rgba(245,158,11,0.30)', background: 'rgba(245,158,11,0.08)', color: 'rgba(245,158,11,0.90)' }}>
       <WifiOff size={10} /><span>Offline</span>
@@ -350,7 +292,7 @@ function OnlineStatus() {
 function PWAUpdateBanner() {
   const push = useNotificationStore((s) => s.push);
   useEffect(() => {
-    const handleUpdate  = () => push({ type: 'info',    title: 'Update available',   message: 'A new version is ready. Refresh to update.' });
+    const handleUpdate  = () => push({ type: 'info',    title: 'Update available',  message: 'A new version is ready. Refresh to update.' });
     const handleOffline = () => push({ type: 'success', title: 'Ready for offline', message: 'App is fully cached and works without internet.' });
     window.addEventListener('pwa:update-available', handleUpdate);
     window.addEventListener('pwa:offline-ready',    handleOffline);
@@ -365,31 +307,24 @@ function MainContent({ session }: { session: Session | null }) {
 
   const content = (() => {
     switch (activeSection) {
-      case 'dashboard':          return <Dashboard />;
-      case 'email':              return <EmailCampaignWidget />;
-      case 'ingest':             return <DataIngestion />;
-      case 'inventory':          return <InventoryDashboard />;
-      case 'analytics':          return <Analytics />;
-      case 'registers':          return <SalesPurchaseTable />;
-      case 'meta':               return <MetaMarketingDashboard />;
-      case 'tasks':              return <TasksPage />;
-      case 'orders':             return <OrderSummaryDashboard />;
-      case 'quotations':         return <QuotationsDashboard />;
-      default:                   return <Dashboard />;
+      case 'dashboard':  return <Dashboard />;
+      case 'email':      return <EmailCampaignWidget />;
+      case 'ingest':     return <DataIngestion />;
+      case 'inventory':  return <InventoryDashboard />;
+      case 'analytics':  return <Analytics />;
+      case 'registers':  return <SalesPurchaseTable />;
+      case 'meta':       return <MetaMarketingDashboard />;
+      case 'tasks':      return <TasksPage />;
+      case 'orders':     return <OrderSummaryDashboard />;
+      case 'quotations': return <QuotationsDashboard />;
+      default:           return <Dashboard />;
     }
   })();
 
-  // suppress unused session warning — kept for auth context if needed by children
   void session;
 
   return (
-    <main
-      className={`
-        app-main
-        transition-all duration-300
-        ${sidebarOpen ? 'lg:pl-sidebar' : 'lg:pl-sidebar-sm'}
-      `}
-    >
+    <main className={`app-main transition-all duration-300 ${sidebarOpen ? 'lg:pl-sidebar' : 'lg:pl-sidebar-sm'}`}>
       <div className="p-3 sm:p-4 md:p-6 animate-fade-in">
         <div className="mx-auto w-full max-w-7xl">{content}</div>
       </div>
@@ -405,31 +340,24 @@ function MainContent({ session }: { session: Session | null }) {
   );
 }
 
-// ─── Ambient Orbs ────────────────────────────────────────────────────────────
+// ─── Ambient Orbs & Particles ─────────────────────────────────────────────────
 function AmbientOrbs() {
   return (
     <div className="fixed inset-0 pointer-events-none overflow-hidden z-0" aria-hidden="true">
-      <div className="absolute rounded-full animate-orb"
-        style={{ width: '600px', height: '600px', top: '-150px', left: '-100px', background: 'radial-gradient(ellipse, rgba(0,185,142,0.18) 0%, transparent 70%)', filter: 'blur(1px)' }} />
-      <div className="absolute rounded-full animate-orb"
-        style={{ width: '500px', height: '500px', top: '30%', right: '-120px', background: 'radial-gradient(ellipse, rgba(0,229,255,0.10) 0%, transparent 70%)', filter: 'blur(1px)', animationDelay: '4s' }} />
-      <div className="absolute rounded-full animate-orb"
-        style={{ width: '550px', height: '550px', bottom: '-100px', left: '35%', background: 'radial-gradient(ellipse, rgba(124,58,237,0.10) 0%, transparent 70%)', filter: 'blur(1px)', animationDelay: '8s' }} />
+      <div className="absolute rounded-full animate-orb" style={{ width: '600px', height: '600px', top: '-150px', left: '-100px', background: 'radial-gradient(ellipse, rgba(0,185,142,0.18) 0%, transparent 70%)', filter: 'blur(1px)' }} />
+      <div className="absolute rounded-full animate-orb" style={{ width: '500px', height: '500px', top: '30%', right: '-120px', background: 'radial-gradient(ellipse, rgba(0,229,255,0.10) 0%, transparent 70%)', filter: 'blur(1px)', animationDelay: '4s' }} />
+      <div className="absolute rounded-full animate-orb" style={{ width: '550px', height: '550px', bottom: '-100px', left: '35%', background: 'radial-gradient(ellipse, rgba(124,58,237,0.10) 0%, transparent 70%)', filter: 'blur(1px)', animationDelay: '8s' }} />
     </div>
   );
 }
 
 function FloatingParticles() {
   const particles = Array.from({ length: 18 }, (_, i) => ({
-    id: i,
-    left: `${(i * 5.5 + 3) % 100}%`,
-    top:  `${(i * 7.3 + 5) % 100}%`,
-    delay: `${(i * 0.7) % 6}s`,
-    duration: `${18 + (i % 5) * 3}s`,
+    id: i, left: `${(i * 5.5 + 3) % 100}%`, top: `${(i * 7.3 + 5) % 100}%`,
+    delay: `${(i * 0.7) % 6}s`, duration: `${18 + (i % 5) * 3}s`,
     color: i % 3 === 0 ? 'rgba(0,185,142,0.55)' : i % 3 === 1 ? 'rgba(0,229,255,0.45)' : 'rgba(167,139,250,0.40)',
     size: i % 2 === 0 ? '4px' : '2px',
   }));
-
   return (
     <div className="fixed inset-0 pointer-events-none overflow-hidden z-0" aria-hidden="true">
       {particles.map((p) => (
@@ -453,12 +381,9 @@ function LoadingScreen() {
       <FloatingParticles />
       <div className="relative z-10 text-center space-y-6">
         <div className="relative mx-auto w-20 h-20">
-          <div className="absolute inset-0 rounded-full border-2 border-transparent animate-spin-slow"
-            style={{ borderTopColor: '#00B98E', borderRightColor: 'rgba(0,185,142,0.20)' }} />
-          <div className="absolute inset-3 rounded-full border border-transparent"
-            style={{ borderBottomColor: '#00E5FF', animation: 'spin 2s linear infinite reverse' }} />
-          <div className="absolute inset-6 rounded-full flex items-center justify-center"
-            style={{ background: 'rgba(0,185,142,0.15)', border: '1px solid rgba(0,185,142,0.40)' }}>
+          <div className="absolute inset-0 rounded-full border-2 border-transparent animate-spin-slow" style={{ borderTopColor: '#00B98E', borderRightColor: 'rgba(0,185,142,0.20)' }} />
+          <div className="absolute inset-3 rounded-full border border-transparent" style={{ borderBottomColor: '#00E5FF', animation: 'spin 2s linear infinite reverse' }} />
+          <div className="absolute inset-6 rounded-full flex items-center justify-center" style={{ background: 'rgba(0,185,142,0.15)', border: '1px solid rgba(0,185,142,0.40)' }}>
             <Sparkles size={14} style={{ color: '#00B98E' }} />
           </div>
         </div>
@@ -476,8 +401,13 @@ function LoadingScreen() {
 
 // ─── App root ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const [session, setSession] = useState<Session | null>(null);
+  const [session,   setSession]   = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
+
+  // ✅ Handle /sso-callback route BEFORE any auth check
+  if (window.location.pathname === '/sso-callback') {
+    return <SSOCallback />;
+  }
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -495,7 +425,13 @@ export default function App() {
   }, []);
 
   if (!authReady) return <LoadingScreen />;
-  if (!session)   return <AuthPage />;
+
+  // ✅ No session → redirect to portal (not local AuthPage)
+  if (!session) {
+    const callback = encodeURIComponent(window.location.href);
+    window.location.replace(`${LANDING_URL}/login?callback=${callback}`);
+    return <LoadingScreen />;
+  }
 
   return (
     <div className="relative min-h-screen text-slate-100 overflow-hidden" style={{ background: '#020617' }}>
