@@ -15,7 +15,7 @@ import { supabase } from '@/lib/supabase';
 
 const EXCHANGE_FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/sso-exchange`;
 const LANDING_URL = (import.meta.env.VITE_LANDING_URL as string | undefined)
-  ?? 'https://portal.stellarglobalsupplies.com';
+  ?? 'https://apps.stellarglobalsupplies.com';
 
 // Replay-attack window: reject SSO URLs older than 5 minutes
 const MAX_AGE_MS = 5 * 60 * 1000;
