@@ -26,7 +26,7 @@ import { setUser, clearUser, recordNavigation } from '@/tracing';
 
 // ── Where the landing page lives ──────────────────────────────────────────────
 const LANDING_URL = (import.meta.env.VITE_LANDING_URL as string | undefined)
-  ?? 'https://portal.stellarglobalsupplies.com';
+  ?? 'https://apps.stellarglobalsupplies.com';
 
 interface NavItem {
   section: NavSection;
